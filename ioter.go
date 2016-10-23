@@ -143,9 +143,6 @@ func rpcSendRawTransaction(signedTransaction []byte) error {
 
 func marshallSendWei(toWhom common.Address) []byte {
 
-	// the Method ID. This is derived as the first 4 bytes of the
-	//   Keccak hash of the ASCII form of the signature baz(uint32,bool).
-
 	def, err := ioutil.ReadFile("contract_abi.json")
 	assert(err)
 
@@ -231,19 +228,19 @@ func main() {
 	log.Println("Transaction count is ", nonce)
 	assert(err)
 
-	amount := big.NewInt(0) // common.Ada
-	gasLimit := common.Babbage
+	amount := big.NewInt(0)
+	gasLimit := common.Babbage // I know, type mismatch
 
 	data := marshallSendWei(account1)
 
 	tx, err := types.NewTransaction(
 		// From is derived from the signature (V, R, S) using secp256k1
 		nonce,           // nonce int64
-		contractAddress, // contractAddress,       // to common.Address
+		contractAddress, // to common.Address
 		amount,          // amount *big.Int
 		gasLimit,        // gasLimit *big.Int
 		gasPrice,        // gasPrice *big.Int
-		data,            // data,     // data []byte
+		data,            // data []byte
 	).SignECDSA(key.PrivateKey)
 
 	assert(err)
