@@ -4,7 +4,9 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"encoding/json"
-	"fmt"
+	"net/http"
+    "bytes"
+    "fmt"
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
@@ -16,13 +18,28 @@ import (
 	"io/ioutil"
 	"log"
 	"math/big"
-	"strings"
 )
 
 const (
 	keyFilename = "key.json"
-    gethRpcUrl = ""
+    gethRpcUrl = "http://localhost:8545"
+    coinbaseStr = "0x018ec086ab7e050e203bff70c876b8f5638f7dc1"
+    contractAddressStr = "0xa114b4907d669616f75da26f23b65fcc991810d9"
+    account1Str = "0x9607e022978dee708567e8f4321fe2cb9d980cb5"
 )
+
+var (
+    coinbase common.Address
+    contractAddress common.Address
+    account1 common.Address
+)
+
+func init() {
+    coinbase = common.StringToAddress(coinbaseStr)
+    contractAddress = common.StringToAddress(contractAddressStr)
+    account1 = common.StringToAddress(account1Str)
+}
+
 
 func assert(err error) {
 	if err != nil {
@@ -31,58 +48,86 @@ func assert(err error) {
 }
 
 type gethRpcCall struct {
-    id      int
-    jsonrpc string
-    method  string
-    params  []string
+    Id      int  `json:"id"`
+    Jsonrpc string `json:"jsonrpc"`
+    Method  string `json:"method"`
+    Params  []string `json:"params"`
+}
+
+type getRpcResponse struct {
+    Id      int  `json:"id"`
+    Jsonrpc string `json:"jsonrpc"`
+    Error *struct {
+         Code int32 `json:"code"`
+         Message string `json:"message"`
+    }
+    Result *string `json:"result"`
 }
 
 func gethRpc(method string, params ...string) (string,error) {
 
     jsonStr, err := json.Marshal(&gethRpcCall {
-        id :1,
-        jsonrpc: "2.0"
-        method: method,
-        params : params,
+        Id :1,
+        Jsonrpc: "2.0",
+        Method: method,
+        Params : params,
     })
 
     if err != nil {
-        return nil,err
+        return "",err
     }
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonStr))
+	req, err := http.NewRequest("POST", gethRpcUrl , bytes.NewBuffer(jsonStr))
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil,err
+		return "",err
 
 	}
 	defer resp.Body.Close()
 
 	body, _ := ioutil.ReadAll(resp.Body)
 
-    return body, nil
+    var response getRpcResponse
+    err = json.Unmarshal(body,&response)
+    fmt.Printf("%v",response)
+    if err != nil {
+        return "",err
+    }
+    if response.Error != nil {
+        return "", fmt.Errorf("%v:%v",response.Error.Message,response.Error.Code)
+    }
+
+    return *response.Result, nil
 }
 
-func rpcGetTransactionCount(address Address) uint64 {
+func rpcGetTransactionCount(address common.Address) (uint64,error) {
 
-	err, body := gethRpc(
+    result , err := gethRpc(
         "eth_getTransactionCount",
         address.Hex(),
-        "lastest",
+        "pending",
     )
 
-	return 1
+    if err != nil {
+         return 0,err
+    }
+
+    fmt.Println("Got =>",result)
+
+    return common.ReadVarInt(common.FromHex(result)),nil
 }
 
-func rpcSendRawTransaction(signedtransactionHex string)  {
+func rpcSendRawTransaction(signedTransaction []byte) (error) {
 
-    err, body := gethRpc(
+    _ , err := gethRpc(
         "eth_sendRawTransaction",
-        signedtransactionHex,
+        common.ToHex(signedTransaction),
     )
+
+    return err
 
 }
 
@@ -93,28 +138,22 @@ func NewBigInt(base10 string) *big.Int {
 }
 
 // Encodes a call to onevent(uint32)
-func abiEncode(v uint32) []byte {
+func marshallSendWei(toWhom common.Address) []byte {
 
 	// the Method ID. This is derived as the first 4 bytes of the
 	//   Keccak hash of the ASCII form of the signature baz(uint32,bool).
 
-	def := `
-    [{
-        "constant":true,
-        "inputs":[
-            {"name":"","type":"uint32"}
-        ],
-        "name":"onevent",
-        "outputs":[
-        ],
-        "type":"function"
-    }]`
+    def,err := ioutil.ReadFile("contract_abi.json")
+    assert(err)
 
-	abi, err := abi.JSON(strings.NewReader(def))
+    abi, err := abi.JSON(bytes.NewReader(def))
 	assert(err)
 
-	packed, err := abi.Pack("onevent", v)
+    fmt.Println( abi )
 
+	packed, err := abi.Pack("sendWei", toWhom)
+
+    fmt.Println("Packed=>",common.ToHex(packed))
 	return packed
 }
 
@@ -125,7 +164,6 @@ func newKey() (*accounts.Key, error) {
 	privateKeyECDSA, err := ecdsa.GenerateKey(secp256k1.S256(), rand.Reader)
 	if err != nil {
 		return nil, err
-
 	}
 
 	id := uuid.NewRandom()
@@ -183,23 +221,25 @@ func main() {
 
 	log.Println("Address is ", key.Address.Hex())
 
-	nonce := rpcGetTransactionCount(key)
+	nonce,err := rpcGetTransactionCount(key.Address)
+    assert(err)
 
-	to := common.StringToAddress("0xac6c708bc24755d926583d60d37879f5039dbca0")
-	amount := NewBigInt("1000000000000000000")
-	gasLimit := NewBigInt("1000000")
-	gasPrice := NewBigInt("20000000000")
+    fmt.Println("trncount=",nonce)
 
-	data := abiEncode(12)
+	amount := common.Ada
+	gasLimit := common.Babbage
+	gasPrice := common.Szabo
+
+	// data := marshallSendWei(account1)
 
 	tx, err := types.NewTransaction(
 		// From is derived from the signature (V, R, S) using secp256k1
 		nonce,    // nonce int64
-		to,       // to common.Address
+		account1, // contractAddress,       // to common.Address
 		amount,   // amount *big.Int
 		gasLimit, // gasLimit *big.Int
 		gasPrice, // gasPrice *big.Int
-		data,     // data []byte
+		nil, // data,     // data []byte
 	).SignECDSA(key.PrivateKey)
 
 	assert(err)
@@ -208,6 +248,6 @@ func main() {
 	assert(err)
 
 	rpcSendRawTransaction(raw)
-	fmt.Println(raw)
 
 }
+
